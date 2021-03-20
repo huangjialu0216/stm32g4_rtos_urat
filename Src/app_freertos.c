@@ -59,7 +59,7 @@ const osThreadAttr_t defaultTask_attributes = {
 osThreadId_t logTaskHandle;
 const osThreadAttr_t logTask_attributes = {
   .name = "logTask",
-  .priority = (osPriority_t) osPriorityLow,
+  .priority = (osPriority_t) osPriorityNormal1,
   .stack_size = 1024 * 4
 };
 /* Definitions for uart2TxIdleBinarySem */
