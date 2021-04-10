@@ -4,7 +4,7 @@
  * @Author: JiaLu
  * @Date: 2021-03-20 00:04:23
  * @LastEditors: JiaLu
- * @LastEditTime: 2021-03-20 15:12:34
+ * @LastEditTime: 2021-04-10 16:36:13
  */
 #include "bsp_uart.h"
 #include "FreeRTOS.h"
@@ -77,8 +77,9 @@ uint8_t BspUart2Init(void)
     uart2_head_str = &bsp_uart_str->uart2_head;
     if((uart2_head_str->rx_data != NULL)|(uart2_head_str->tx_data != NULL))
         BspUart2DeInit();
-    uart2_head_str->rx_data = pvPortMalloc(UART2_RX_MAX_LEN);
+    uart2_head_str->rx_data = pvPortMalloc(UART2_RX_MAX_LEN * UART2_RX_MAX_FPS);
     uart2_head_str->tx_data = pvPortMalloc(UART2_TX_MAX_LEN);
+    uart2_head_str->rx_data_fps = 0;
     if(uart2_head_str->tx_data == NULL)
         return 2;
     if(uart2_head_str->rx_data == NULL)
@@ -138,16 +139,41 @@ void printf2(char* fmt,...)
         
         i=vsnprintf((char*)uart_head_str->tx_data,UART2_TX_MAX_LEN,fmt,ap);
         va_end(ap);
-        if(i == 0)
+        if((i == 0)||(i > UART2_TX_MAX_LEN))
 		{
 			xSemaphoreGive(uart2TxIdleBinarySemHandle);	//释放信号量
 			return;
 		}
-        HAL_UART_Transmit_DMA(&huart2,uart_head_str->tx_data,i);
+        if(HAL_UART_Transmit_DMA(&huart2,uart_head_str->tx_data,i)!=HAL_OK)
+            xSemaphoreGive(uart2TxIdleBinarySemHandle);	//释放信号量
+
     }
 }
 
-
+/**
+ * @name: 
+ * @description: 串口2接收数据获取
+ * @msg: 
+ * @param {UartRxData} *uart_rx ：接收数据指针
+ * @return {*} 0：未接收到数据    1：接收到数据
+ */
+uint8_t BspGetUart2RxData(UartRxData *uart_rx)
+{
+    if(xSemaphoreTake(uart2RxIdleBinarySemHandle,0) == pdFALSE)
+        return 0;
+    UartHead* uart_head_str;
+    uart_head_str = &bsp_uart_str->uart2_head;
+    taskENTER_CRITICAL();
+    if(uart_head_str->rx_data_fps == 0)
+        uart_rx->rx_data = uart_head_str->rx_data + (UART2_RX_MAX_FPS-1) * UART2_RX_MAX_LEN;
+    else
+        uart_rx->rx_data = uart_head_str->rx_data + (uart_head_str->rx_data_fps-1) * UART2_RX_MAX_LEN;
+    uart_rx->rx_data_len = uart_head_str->rx_data_len;
+    uart_rx->rx_time_difference = uart_head_str->rx_time_difference;
+    uart_rx->rx_last_time = uart_head_str->rx_last_time;
+    taskEXIT_CRITICAL();
+    return 1;
+}
 
 /**
  * @name: 
@@ -163,27 +189,33 @@ void BspUsrtIrqHandler(UART_HandleTypeDef *huart)
         if ((__HAL_UART_GET_FLAG(huart, UART_FLAG_IDLE) != RESET))
         {
             __HAL_UART_CLEAR_IDLEFLAG(huart);
-            HAL_UART_DMAStop(huart);
+            HAL_DMA_Abort(huart->hdmarx);
+            CLEAR_BIT(huart->Instance->CR1, (USART_CR1_RXNEIE_RXFNEIE | USART_CR1_PEIE));
+            CLEAR_BIT(huart->Instance->CR3, (USART_CR3_EIE | USART_CR3_RXFTIE));
+            huart->RxState = HAL_UART_STATE_READY;
+            huart->RxISR = NULL;
+
             if((bsp_uart_str == NULL)||(bsp_uart_str->uart2_head.tx_data == NULL))
                 return ;
             UartHead* uart_head_str;
             uart_head_str = &bsp_uart_str->uart2_head;
-
+            uart_head_str->rx_data_fps +=1;
+            if(uart_head_str->rx_data_fps >= UART2_RX_MAX_FPS)
+                uart_head_str->rx_data_fps = 0;
             uart_head_str->rx_time_difference = HAL_GetTick() - uart_head_str->rx_last_time;
             uart_head_str->rx_last_time = HAL_GetTick();
             uart_head_str->rx_data_len = UART2_RX_MAX_LEN - __HAL_DMA_GET_COUNTER(huart->hdmarx);
 
             BaseType_t  pxHigherPriorityTaskWoken;
             xSemaphoreGiveFromISR(uart2RxIdleBinarySemHandle,&pxHigherPriorityTaskWoken);	//释放信号量
-            //如果需要的话进行一次任务切换
-            portYIELD_FROM_ISR(pxHigherPriorityTaskWoken);
 
-            HAL_UART_Receive_DMA(&huart2,uart_head_str->rx_data,UART2_RX_MAX_LEN);
+            HAL_UART_Receive_DMA(&huart2,uart_head_str->rx_data + uart_head_str->rx_data_fps * UART2_RX_MAX_LEN,UART2_RX_MAX_LEN);
             __HAL_UART_ENABLE_IT(&huart2, UART_IT_IDLE);
             SET_BIT(huart2.Instance->ISR, USART_ISR_IDLE);
+            //如果需要的话进行一次任务切换
+            portYIELD_FROM_ISR(pxHigherPriorityTaskWoken);
         }
     }
-	
 }
 
 /**
@@ -204,9 +236,5 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 		portYIELD_FROM_ISR(pxHigherPriorityTaskWoken);
 	}
 
-	
 }
-
-
-
 

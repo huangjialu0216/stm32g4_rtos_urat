@@ -4,7 +4,7 @@
  * @Author: JiaLu
  * @Date: 2021-03-19 22:48:20
  * @LastEditors: JiaLu
- * @LastEditTime: 2021-03-20 13:26:42
+ * @LastEditTime: 2021-04-10 18:04:38
  */
 #include "app_log.h"
 #include "bsp_led.h"
@@ -20,11 +20,13 @@ void StartLogTask(void *argument)
 {
     uint16_t cnt_ms = 0;
     uint32_t test_cnt = 0;
+	UartRxData uart_rx;
     BspUartInit();
     TickType_t last_time = xTaskGetTickCount();
     for(;;)
     {
-        vTaskDelayUntil(&last_time,10);
+        // vTaskDelayUntil(&last_time,10);
+		vTaskDelay(10);
         cnt_ms++;
         if(cnt_ms >99)
             cnt_ms = 0;
@@ -54,6 +56,15 @@ void StartLogTask(void *argument)
 				}
 			}
 		#endif
+		
+		if(BspGetUart2RxData(&uart_rx))
+		{
+			APP_LOG_DEBUG("串口2接收数据时间：%dms\r\n",uart_rx.rx_last_time);
+			APP_LOG_DEBUG("串口2接收时间周期：%dms\r\n",uart_rx.rx_time_difference);
+			APP_LOG_DEBUG("串口2接收数据长度：%dByte\r\n",uart_rx.rx_data_len);
+			uart_rx.rx_data[uart_rx.rx_data_len] = 0;
+			APP_LOG_DEBUG("串口2接收数据：%s\r\n",uart_rx.rx_data);
+		}
         LedSetState( state);
         LedTaskCycle();
     }
